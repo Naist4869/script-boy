@@ -132,6 +132,7 @@ END:
 }
 
 func openFile(inputFileName string, outputFileName string) ([]entry, int, *os.File, error) {
+
 	outputFile, err := os.OpenFile(outputFileName, os.O_RDWR|os.O_CREATE, 0666)
 	if err != nil {
 		return nil, 0, nil, errors.Wrap(err, "opening or creating output file")

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -298,9 +299,15 @@ func (c *coordinator) writeLines(entries []entry) error {
 		if i == 0 || entries[i-1].processed {
 			if line.processed {
 				count = i + 1
-				if _, err := fmt.Fprintf(w, "%s%s%s%s%s\n", line.username, userPassDelimiter, line.password, passAccessTokenDelimiter, line.accessToken); err != nil {
-					return err // 处理写入错误
+
+				if line.accessToken != "" {
+					if index := strings.Index(line.accessToken, "<"); index == -1 {
+						if _, err := fmt.Fprintf(w, "%s%s%s%s%s\n", line.username, userPassDelimiter, line.password, passAccessTokenDelimiter, line.accessToken); err != nil {
+							return err // 处理写入错误
+						}
+					}
 				}
+
 			} else {
 				break // 遇到未处理的行，停止写入
 			}
