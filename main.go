@@ -139,7 +139,7 @@ func openFile(inputFileName string, outputFileName string) ([]entry, int, *os.Fi
 	}
 
 	// 计算需要跳过的行数
-	skipLine, err := calculateSkipLine(outputFile)
+	skipLine, breakpointResumption, err := calculateSkipLine(outputFile)
 	if err != nil {
 		outputFile.Close()
 		return nil, 0, nil, errors.Wrap(err, "reading from output file")
@@ -153,7 +153,7 @@ func openFile(inputFileName string, outputFileName string) ([]entry, int, *os.Fi
 	}
 	defer inputFile.Close()
 
-	entries, nextParseLine, err := processInputFile(inputFile, outputFile, skipLine)
+	entries, nextParseLine, err := processInputFile(inputFile, outputFile, skipLine, breakpointResumption)
 	if err != nil {
 		outputFile.Close()
 		return nil, 0, nil, err
@@ -162,10 +162,14 @@ func openFile(inputFileName string, outputFileName string) ([]entry, int, *os.Fi
 	return entries, nextParseLine, outputFile, nil
 }
 
-func calculateSkipLine(file *os.File) (string, error) {
+func calculateSkipLine(file *os.File) (string, bool, error) {
 	scanner := bufio.NewScanner(file)
-	var lastLine string
+	var (
+		breakpointResumption bool
+		lastLine             string
+	)
 	for scanner.Scan() {
+		breakpointResumption = true
 		line := scanner.Text()
 		if strings.Contains(line, "@") {
 			split := strings.Split(line, userPassDelimiter)
@@ -177,10 +181,24 @@ func calculateSkipLine(file *os.File) (string, error) {
 		}
 	}
 
-	return lastLine, scanner.Err()
+	if breakpointResumption && lastLine == "" {
+		// Clear the file content
+		err := file.Truncate(0)
+		if err != nil {
+			return "", false, err // Return the error if truncation fails
+		}
+		// Seek to the beginning of the file
+		_, err = file.Seek(0, 0)
+		if err != nil {
+			return "", false, err // Return the error if seeking fails
+		}
+		return "", false, nil
+	}
+
+	return lastLine, breakpointResumption, scanner.Err()
 }
 
-func processInputFile(inputFile *os.File, outputFile *os.File, skipLine string) ([]entry, int, error) {
+func processInputFile(inputFile *os.File, outputFile *os.File, skipLine string, breakpointResumption bool) ([]entry, int, error) {
 	var entries = []entry{{}}
 	scanner := bufio.NewScanner(inputFile)
 
@@ -194,7 +212,7 @@ func processInputFile(inputFile *os.File, outputFile *os.File, skipLine string) 
 			password string
 		)
 
-		if skipLine != "" {
+		if breakpointResumption {
 			if nextParseLine == 0 {
 				nextParseLine = BreakpointResumption(skipLine, line, lineCount)
 			}
