@@ -148,6 +148,7 @@ func openFile(inputFileName string, outputFileName string) ([]entry, int, *os.Fi
 	inputFile, err := os.Open(inputFileName)
 	if err != nil {
 		outputFile.Close()
+		os.Remove(outputFileName) // 删除文件并忽略错误
 		return nil, 0, nil, errors.Wrap(err, "opening input file")
 	}
 	defer inputFile.Close()
@@ -161,49 +162,68 @@ func openFile(inputFileName string, outputFileName string) ([]entry, int, *os.Fi
 	return entries, nextParseLine, outputFile, nil
 }
 
-func calculateSkipLine(file *os.File) (int, error) {
+func calculateSkipLine(file *os.File) (string, error) {
 	scanner := bufio.NewScanner(file)
-	lineCount := 0
-	for scanner.Scan() {
-		lineCount++
-	}
-
-	return lineCount + 1, scanner.Err()
-}
-
-func processInputFile(inputFile *os.File, outputFile *os.File, skipLine int) ([]entry, int, error) {
-	var entries = []entry{{}}
-	scanner := bufio.NewScanner(inputFile)
-	lineCount := 0
-
-	var nextParseLine int
+	var lastLine string
 	for scanner.Scan() {
 		line := scanner.Text()
-		lineCount++
+		if strings.Contains(line, "@") {
+			split := strings.Split(line, userPassDelimiter)
+			if len(split) < 2 {
+				slog.Error(fmt.Sprintf("invalid output file line: %s", line))
+			} else {
+				lastLine = line
+			}
+		}
+	}
+
+	return lastLine, scanner.Err()
+}
+
+func processInputFile(inputFile *os.File, outputFile *os.File, skipLine string) ([]entry, int, error) {
+	var entries = []entry{{}}
+	scanner := bufio.NewScanner(inputFile)
+
+	var nextParseLine int
+
+	for lineCount := 1; scanner.Scan(); lineCount++ {
+		line := scanner.Text()
 
 		var (
 			username string
 			password string
 		)
 
-		if lineCount >= skipLine {
-
-			if strings.Contains(line, "@") && len(strings.Split(line, userPassDelimiter)) > 1 {
-				if nextParseLine == 0 {
-					nextParseLine = lineCount
-				}
+		if skipLine != "" {
+			if nextParseLine == 0 {
+				nextParseLine = BreakpointResumption(skipLine, line, lineCount)
+			}
+			if nextParseLine != 0 && lineCount >= nextParseLine {
 				split := strings.Split(line, userPassDelimiter)
 				if len(split) < 2 {
 					slog.Error(fmt.Sprintf("invalid line: %s", line))
+				} else {
+					username = split[0]
+					password = split[1]
 				}
-				username = split[0]
-				password = split[1]
+			}
+		} else {
+			if strings.Contains(line, "@") {
+				split := strings.Split(line, userPassDelimiter)
+				if nextParseLine == 0 {
+					nextParseLine = lineCount
+				}
+				if len(split) < 2 {
+					slog.Error(fmt.Sprintf("invalid line: %s", line))
+				} else {
+					username = split[0]
+					password = split[1]
+				}
 			} else {
 				if _, err := outputFile.WriteString(line + "\n"); err != nil {
 					return nil, 0, errors.Wrap(err, "writing to output file")
 				}
 			}
-
 		}
 
 		entries = append(entries, entry{
@@ -214,6 +234,13 @@ func processInputFile(inputFile *os.File, outputFile *os.File, skipLine int) ([]
 	}
 
 	return entries, nextParseLine, scanner.Err()
+}
+
+func BreakpointResumption(skipLine string, line string, lineCount int) int {
+	if line != "" && strings.Contains(skipLine, line) {
+		return lineCount + 1
+	}
+	return 0
 }
 
 func main() {

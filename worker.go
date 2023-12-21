@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/avast/retry-go"
+
 	"github.com/pkg/errors"
 )
 
@@ -64,51 +66,70 @@ type GetSessionResponse struct {
 	RefreshCookie string    `json:"refresh_cookie"`
 }
 
+var ErrRetry = errors.New("need retry")
+
 func (w *worker) Work(input input) (entry, error) {
 	if input.entry.username == "" || input.entry.password == "" {
 		return input.entry, nil
 	}
 	slog.Info(fmt.Sprintf("handling work line: %d", input.line))
-	input.entry.processed = true
-	url := "https://replace-your-url/api/auth"
-	payload := strings.NewReader(fmt.Sprintf("username=%s&password=%s", input.username, input.password))
+	entry := input.entry
+	entry.processed = true
 
-	req, err := http.NewRequest("POST", url, payload)
-	if err != nil {
-		return input.entry, err
-	}
-	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
-
-	response, err := w.client.Do(req)
-	if err != nil {
-		input.accessToken = "<" + err.Error() + ">"
-		return input.entry, err
-	}
-	defer response.Body.Close()
-
-	body, err := io.ReadAll(response.Body)
-	if err != nil {
-		return input.entry, err
-	}
-	v := new(Response)
-	if err = json.Unmarshal(body, v); err != nil {
-		return input.entry, err
-	}
-
-	if v.ErrorMsg != "" {
-		return input.entry, errors.New(v.ErrorMsg)
-	}
-
-	if v.Code != 0 {
-		if v.Reason == "" {
-			input.entry.accessToken = "<" + v.Message + ">"
-		} else {
-			input.entry.accessToken = "<" + v.Reason + ">"
+	err := retry.Do(func() error {
+		url := "https://replace-your-url/api/auth"
+		payload := strings.NewReader(fmt.Sprintf("username=%s&password=%s", entry.username, entry.password))
+		req, err := http.NewRequest("POST", url, payload)
+		if err != nil {
+			return err
 		}
-		return input.entry, fmt.Errorf("code: %d, reason: %s, message: %s", v.Code, v.Reason, v.Message)
+		req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+		response, err := w.client.Do(req)
+		if err != nil {
+			entry.accessToken = "<" + err.Error() + ">"
+			return errors.Wrap(ErrRetry, err.Error())
+		}
+		defer response.Body.Close()
+		body, err := io.ReadAll(response.Body)
+		if err != nil {
+			return err
+		}
+		v := new(Response)
+		if err = json.Unmarshal(body, v); err != nil {
+			return err
+		}
+
+		if v.ErrorMsg != "" {
+			return errors.Wrap(ErrRetry, v.ErrorMsg)
+		}
+
+		if v.Code != 0 {
+			if v.Reason == "" {
+				entry.accessToken = "<" + v.Message + ">"
+			} else {
+				entry.accessToken = "<" + v.Reason + ">"
+				if v.Reason == "INTERNAL_SERVER_ERROR" {
+					return errors.Wrap(ErrRetry, v.Reason)
+				}
+			}
+			return fmt.Errorf("code: %d, reason: %s, message: %s", v.Code, v.Reason, v.Message)
+		}
+		entry.accessToken = v.Data.AccessToken
+		return nil
+	},
+		retry.Attempts(5),
+		retry.Delay(300*time.Millisecond),
+		retry.OnRetry(func(n uint, err error) {
+			//slog.Warn(fmt.Sprintf("Retry line: %d, #%d: %v", entry.line, n, err))
+		}),
+		retry.RetryIf(func(err error) bool {
+			return errors.Is(err, ErrRetry)
+		},
+		))
+	slog.Info(fmt.Sprintf("success work line: %d", entry.line))
+	if err != nil {
+		return entry, err
 	}
 
-	slog.Info(fmt.Sprintf("success work line: %d", input.line))
-	input.entry.accessToken = v.Data.AccessToken
-	return input.entry, nil
+	return entry, nil
 }
