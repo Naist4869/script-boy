@@ -172,15 +172,8 @@ func calculateSkipLine(file *os.File) (string, bool, error) {
 		breakpointResumption = true
 		line := scanner.Text()
 
-		parts := strings.SplitN(line, " ", 2)
-		firstPart := parts[0]
-		if strings.Contains(firstPart, "@") {
-			split := strings.Split(firstPart, userPassDelimiter)
-			if len(split) == 2 {
-				lastLine = firstPart
-			} else {
-				slog.Error(fmt.Sprintf("invalid output file line: %s", firstPart))
-			}
+		if strings.Contains(line, "@") {
+			lastLine = line
 		}
 	}
 
@@ -219,13 +212,13 @@ func processInputFile(inputFile *os.File, outputFile *os.File, skipLine string, 
 
 		if breakpointResumption {
 			if nextParseLine == 0 {
-				nextParseLine = BreakpointResumption(skipLine, line, lineCount)
+				nextParseLine = BreakpointResumption(skipLine, firstPart, lineCount)
 			}
 			if nextParseLine != 0 && lineCount >= nextParseLine {
 				split := strings.Split(firstPart, userPassDelimiter)
-				if len(split) == 2 {
+				if len(split) >= 2 {
 					username = split[0]
-					password = split[1]
+					password = strings.Join(split[1:], userPassDelimiter)
 				} else {
 					slog.Error(fmt.Sprintf("breakpointResumption: %t, invalid line: %s", breakpointResumption, line))
 				}
@@ -233,12 +226,12 @@ func processInputFile(inputFile *os.File, outputFile *os.File, skipLine string, 
 		} else {
 			if strings.Contains(firstPart, "@") {
 				split := strings.Split(firstPart, userPassDelimiter)
-				if nextParseLine == 0 {
-					nextParseLine = lineCount
-				}
-				if len(split) == 2 {
+				if len(split) >= 2 {
+					if nextParseLine == 0 {
+						nextParseLine = lineCount
+					}
 					username = split[0]
-					password = split[1]
+					password = strings.Join(split[1:], userPassDelimiter)
 				} else {
 					slog.Error(fmt.Sprintf("breakpointResumption: %t, invalid line: %s", breakpointResumption, line))
 				}
