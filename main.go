@@ -171,12 +171,15 @@ func calculateSkipLine(file *os.File) (string, bool, error) {
 	for scanner.Scan() {
 		breakpointResumption = true
 		line := scanner.Text()
-		if strings.Contains(line, "@") {
-			split := strings.Split(line, userPassDelimiter)
-			if len(split) < 2 {
-				slog.Error(fmt.Sprintf("invalid output file line: %s", line))
+
+		parts := strings.SplitN(line, " ", 2)
+		firstPart := parts[0]
+		if strings.Contains(firstPart, "@") {
+			split := strings.Split(firstPart, userPassDelimiter)
+			if len(split) == 2 {
+				lastLine = firstPart
 			} else {
-				lastLine = line
+				slog.Error(fmt.Sprintf("invalid output file line: %s", firstPart))
 			}
 		}
 	}
@@ -206,7 +209,9 @@ func processInputFile(inputFile *os.File, outputFile *os.File, skipLine string, 
 
 	for lineCount := 1; scanner.Scan(); lineCount++ {
 		line := scanner.Text()
-
+		// Split the line at the first space
+		parts := strings.SplitN(line, " ", 2)
+		firstPart := parts[0]
 		var (
 			username string
 			password string
@@ -217,25 +222,25 @@ func processInputFile(inputFile *os.File, outputFile *os.File, skipLine string, 
 				nextParseLine = BreakpointResumption(skipLine, line, lineCount)
 			}
 			if nextParseLine != 0 && lineCount >= nextParseLine {
-				split := strings.Split(line, userPassDelimiter)
-				if len(split) < 2 {
-					slog.Error(fmt.Sprintf("invalid line: %s", line))
-				} else {
+				split := strings.Split(firstPart, userPassDelimiter)
+				if len(split) == 2 {
 					username = split[0]
 					password = split[1]
+				} else {
+					slog.Error(fmt.Sprintf("breakpointResumption: %t, invalid line: %s", breakpointResumption, line))
 				}
 			}
 		} else {
-			if strings.Contains(line, "@") {
-				split := strings.Split(line, userPassDelimiter)
+			if strings.Contains(firstPart, "@") {
+				split := strings.Split(firstPart, userPassDelimiter)
 				if nextParseLine == 0 {
 					nextParseLine = lineCount
 				}
-				if len(split) < 2 {
-					slog.Error(fmt.Sprintf("invalid line: %s", line))
-				} else {
+				if len(split) == 2 {
 					username = split[0]
 					password = split[1]
+				} else {
+					slog.Error(fmt.Sprintf("breakpointResumption: %t, invalid line: %s", breakpointResumption, line))
 				}
 			} else {
 				if _, err := outputFile.WriteString(line + "\n"); err != nil {
