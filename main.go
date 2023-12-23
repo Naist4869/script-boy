@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/pkg/errors"
@@ -37,7 +38,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&inputExample, "inputExample", "matt.carpenter1411@gmail.com:Carpie14", "Input example like matt.carpenter1411@gmail.com:Carpie14")
 	rootCmd.PersistentFlags().StringVar(&outputExample, "outputExample", "matt.carpenter1411@gmail.com:Carpie14 | ATK = <accesstoken>", "Output example like matt.carpenter1411@gmail.com:Carpie14 | ATK = <accesstoken>")
 
-	userPassDelimiter, passAccessTokenDelimiter = parseDelimiter(inputExample, outputExample)
+	passAccessTokenDelimiter = parseDelimiter(inputExample, outputExample)
 }
 
 var rootCmd = &cobra.Command{
@@ -48,22 +49,27 @@ var rootCmd = &cobra.Command{
 }
 
 func findDelimiter(s string) string {
-	delimiter := ""
+	colonCount := 0
+	dashCount := 0
+
 	for _, char := range s {
-		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '@' || char == '.' {
-			if delimiter != "" {
-				break
-			}
-		} else {
-			delimiter += string(char)
+		if char == '-' {
+			dashCount++
+		} else if char == ':' {
+			colonCount++
 		}
 	}
-	return delimiter
+
+	if dashCount >= 4 {
+		return "----"
+	} else if colonCount >= 1 {
+		return ":"
+	}
+
+	return ""
 }
 
-func parseDelimiter(inputStr, outputStr string) (string, string) {
-	userPassDelimiter := findDelimiter(inputStr)
-
+func parseDelimiter(inputStr, outputStr string) string {
 	// Identifying the delimiter between password and accesstoken in the output string
 	startIndex := strings.Index(outputStr, inputStr) + len(inputStr)
 
@@ -71,7 +77,7 @@ func parseDelimiter(inputStr, outputStr string) (string, string) {
 	endIndex := strings.Index(remainingStr, "<")
 	passAccessTokenDelimiter := remainingStr[:endIndex]
 
-	return userPassDelimiter, passAccessTokenDelimiter
+	return passAccessTokenDelimiter
 }
 
 func transform(cmd *cobra.Command, args []string) {
@@ -194,15 +200,31 @@ func calculateSkipLine(file *os.File) (string, bool, error) {
 	return lastLine, breakpointResumption, scanner.Err()
 }
 
+var userPassDelimiterMap = map[string]struct{}{}
+
+var userPassDelimiterReMap = map[string]*regexp.Regexp{}
+var oldnew []string
+
 func processInputFile(inputFile *os.File, outputFile *os.File, skipLine string, breakpointResumption bool) ([]entry, int, error) {
 	var entries = []entry{{}}
 	scanner := bufio.NewScanner(inputFile)
 
-	var nextParseLine int
+	var (
+		nextParseLine           int
+		parsedHeaderInformation bool
+	)
 
 	for lineCount := 1; scanner.Scan(); lineCount++ {
 		line := scanner.Text()
-		// Split the line at the first space
+
+		// Step 1: Normalize spaces around delimiters
+		for delimiter, re := range userPassDelimiterReMap {
+			line = re.ReplaceAllString(line, " "+delimiter+" ")
+		}
+
+		// Step 2: Apply delimiter formatting
+		replacer := strings.NewReplacer(oldnew...)
+		line = replacer.Replace(line)
 		parts := strings.SplitN(line, " ", 2)
 		firstPart := parts[0]
 		var (
@@ -210,21 +232,52 @@ func processInputFile(inputFile *os.File, outputFile *os.File, skipLine string, 
 			password string
 		)
 
+		delimiter := findDelimiter(line)
 		if breakpointResumption {
 			if nextParseLine == 0 {
 				nextParseLine = BreakpointResumption(skipLine, firstPart, lineCount)
 			}
 			if nextParseLine != 0 && lineCount >= nextParseLine {
-				split := strings.Split(firstPart, userPassDelimiter)
-				if len(split) >= 2 {
-					username = split[0]
-					password = strings.Join(split[1:], userPassDelimiter)
+				if strings.Contains(firstPart, "@") && strings.Contains(firstPart, ".") && delimiter != "" {
+					userPassDelimiter := delimiter
+					_, exist := userPassDelimiterMap[userPassDelimiter]
+					if !exist {
+						userPassDelimiterMap[userPassDelimiter] = struct{}{}
+						regexPattern := "\\s*" + regexp.QuoteMeta(delimiter) + "\\s*"
+						re := regexp.MustCompile(regexPattern)
+						userPassDelimiterReMap[userPassDelimiter] = re
+
+						oldnew = append(oldnew, " "+delimiter+" ", delimiter)
+						oldnew = append(oldnew, delimiter+" ", delimiter)
+						oldnew = append(oldnew, " "+delimiter, delimiter)
+
+					}
+
+					split := strings.Split(firstPart, userPassDelimiter)
+					if len(split) >= 2 {
+						username = split[0]
+						password = strings.Join(split[1:], userPassDelimiter)
+					} else {
+						slog.Error(fmt.Sprintf("skip %d, skip invalid line: %s, breakpointResumption: %t", lineCount, line, breakpointResumption))
+					}
 				} else {
-					slog.Error(fmt.Sprintf("breakpointResumption: %t, invalid line: %s", breakpointResumption, line))
+					slog.Error(fmt.Sprintf("skip %d, skip invalid line: %s, breakpointResumption: %t", lineCount, line, breakpointResumption))
 				}
 			}
 		} else {
-			if strings.Contains(firstPart, "@") {
+			if strings.Contains(firstPart, "@") && strings.Contains(firstPart, ".") {
+				parsedHeaderInformation = true
+				userPassDelimiter := delimiter
+				_, exist := userPassDelimiterMap[userPassDelimiter]
+				if !exist {
+					userPassDelimiterMap[userPassDelimiter] = struct{}{}
+					regexPattern := "\\s*" + regexp.QuoteMeta(delimiter) + "\\s*"
+					re := regexp.MustCompile(regexPattern)
+					userPassDelimiterReMap[userPassDelimiter] = re
+					oldnew = append(oldnew, " "+delimiter+" ", delimiter)
+					oldnew = append(oldnew, delimiter+" ", delimiter)
+					oldnew = append(oldnew, " "+delimiter, delimiter)
+				}
 				split := strings.Split(firstPart, userPassDelimiter)
 				if len(split) >= 2 {
 					if nextParseLine == 0 {
@@ -233,12 +286,14 @@ func processInputFile(inputFile *os.File, outputFile *os.File, skipLine string, 
 					username = split[0]
 					password = strings.Join(split[1:], userPassDelimiter)
 				} else {
-					slog.Error(fmt.Sprintf("breakpointResumption: %t, invalid line: %s", breakpointResumption, line))
+					slog.Error(fmt.Sprintf("skip %d, invalid line: %s, breakpointResumption: %t", lineCount, line, breakpointResumption))
 				}
-			} else {
+			} else if !parsedHeaderInformation {
 				if _, err := outputFile.WriteString(line + "\n"); err != nil {
 					return nil, 0, errors.Wrap(err, "writing to output file")
 				}
+			} else {
+				slog.Error(fmt.Sprintf("skip %d, skip invalid line: %s, breakpointResumption: %t", lineCount, line, breakpointResumption))
 			}
 		}
 
