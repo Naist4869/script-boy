@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -69,12 +68,11 @@ type GetSessionResponse struct {
 var ErrRetry = errors.New("need retry")
 
 func (w *worker) Work(input input) (entry, error) {
-	if input.entry.username == "" || input.entry.password == "" {
-		return input.entry, nil
-	}
-	slog.Info(fmt.Sprintf("handling work line: %d", input.line))
 	entry := input.entry
 	entry.processed = true
+	if input.entry.username == "" || input.entry.password == "" {
+		return entry, nil
+	}
 
 	err := retry.Do(func() error {
 		url := "https://replace-your-url/api/auth"
@@ -126,7 +124,6 @@ func (w *worker) Work(input input) (entry, error) {
 			return errors.Is(err, ErrRetry)
 		},
 		))
-	slog.Info(fmt.Sprintf("success work line: %d", entry.line))
 	if err != nil {
 		return entry, err
 	}

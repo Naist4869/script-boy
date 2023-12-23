@@ -52,11 +52,12 @@ type result struct {
 }
 
 type entry struct {
-	username    string
-	password    string
-	accessToken string
-	line        int
-	processed   bool
+	username          string
+	password          string
+	accessToken       string
+	line              int
+	processed         bool
+	userPassDelimiter string
 }
 
 func newCoordinator(ctx context.Context, cancel context.CancelCauseFunc, outputFile *os.File, entries []entry, nextParseLine int, qps int, parallel int, limit int64, timeout int64) (*coordinator, error) {
@@ -164,7 +165,7 @@ func (c *coordinator) CoordinateStart() (err error) {
 	statTicker := time.NewTicker(3 * time.Second)
 	defer statTicker.Stop()
 
-	flushTicker := time.NewTicker(2 * time.Second)
+	flushTicker := time.NewTicker(1 * time.Second)
 	defer flushTicker.Stop()
 	// 停止时打印一次log
 	defer c.logStats(stopping, true)
@@ -198,7 +199,7 @@ func (c *coordinator) CoordinateStart() (err error) {
 			if result.err != nil {
 				slog.Info(fmt.Sprintf("line: %d, err: %v", result.workResult.line, result.err))
 			} else {
-				slog.Info(fmt.Sprintf("line: %d, ok", result.workResult.line))
+				slog.Info(fmt.Sprintf("line: %d, ok: %s %s", result.workResult.line, result.workResult.username, result.workResult.password))
 			}
 
 			if c.limit > 0 && c.count >= c.limit {
@@ -302,8 +303,14 @@ func (c *coordinator) writeLines(entries []entry) error {
 
 				if line.accessToken != "" {
 					if index := strings.Index(line.accessToken, "<"); index == -1 {
-						if _, err := fmt.Fprintf(w, "%s%s%s%s%s\n", line.username, userPassDelimiter, line.password, passAccessTokenDelimiter, line.accessToken); err != nil {
-							return err // 处理写入错误
+						if onlyATK {
+							if _, err := fmt.Fprintf(w, "ATK = %s\n", line.accessToken); err != nil {
+								return err // 处理写入错误
+							}
+						} else {
+							if _, err := fmt.Fprintf(w, "%s%s%s%s%s\n", line.username, line.userPassDelimiter, line.password, passAccessTokenDelimiter, line.accessToken); err != nil {
+								return err // 处理写入错误
+							}
 						}
 					}
 				}

@@ -24,8 +24,8 @@ var (
 	timeout                  int64
 	inputExample             string
 	outputExample            string
-	userPassDelimiter        string
 	passAccessTokenDelimiter string
+	onlyATK                  bool
 )
 
 func init() {
@@ -37,6 +37,7 @@ func init() {
 	rootCmd.PersistentFlags().Int64Var(&timeout, "timeout", 0, "Timeout in seconds")
 	rootCmd.PersistentFlags().StringVar(&inputExample, "inputExample", "matt.carpenter1411@gmail.com:Carpie14", "Input example like matt.carpenter1411@gmail.com:Carpie14")
 	rootCmd.PersistentFlags().StringVar(&outputExample, "outputExample", "matt.carpenter1411@gmail.com:Carpie14 | ATK = <accesstoken>", "Output example like matt.carpenter1411@gmail.com:Carpie14 | ATK = <accesstoken>")
+	rootCmd.PersistentFlags().BoolVar(&onlyATK, "onlyATK", false, "Output only the ATK if set to true")
 
 	passAccessTokenDelimiter = parseDelimiter(inputExample, outputExample)
 }
@@ -258,10 +259,10 @@ func processInputFile(inputFile *os.File, outputFile *os.File, skipLine string, 
 						username = split[0]
 						password = strings.Join(split[1:], userPassDelimiter)
 					} else {
-						slog.Error(fmt.Sprintf("skip %d, skip invalid line: %s, breakpointResumption: %t", lineCount, line, breakpointResumption))
+						slog.Error(fmt.Sprintf("skip %d, invalid line: %s, breakpointResumption: %t", lineCount, line, breakpointResumption))
 					}
 				} else {
-					slog.Error(fmt.Sprintf("skip %d, skip invalid line: %s, breakpointResumption: %t", lineCount, line, breakpointResumption))
+					slog.Error(fmt.Sprintf("skip %d, invalid line: %s, breakpointResumption: %t", lineCount, line, breakpointResumption))
 				}
 			}
 		} else {
@@ -293,14 +294,15 @@ func processInputFile(inputFile *os.File, outputFile *os.File, skipLine string, 
 					return nil, 0, errors.Wrap(err, "writing to output file")
 				}
 			} else {
-				slog.Error(fmt.Sprintf("skip %d, skip invalid line: %s, breakpointResumption: %t", lineCount, line, breakpointResumption))
+				slog.Error(fmt.Sprintf("skip %d, invalid line: %s, breakpointResumption: %t", lineCount, line, breakpointResumption))
 			}
 		}
 
 		entries = append(entries, entry{
-			username: username,
-			password: password,
-			line:     lineCount,
+			username:          username,
+			password:          password,
+			line:              lineCount,
+			userPassDelimiter: delimiter,
 		})
 	}
 
