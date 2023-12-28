@@ -26,6 +26,10 @@ var (
 	outputExample            string
 	passAccessTokenDelimiter string
 	onlyATK                  bool
+	endpoint                 string
+	delimiterInput           string
+	delimiters               []string // 解析后的分隔符列表
+
 )
 
 func init() {
@@ -38,6 +42,9 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&inputExample, "inputExample", "matt.carpenter1411@gmail.com:Carpie14", "Input example like matt.carpenter1411@gmail.com:Carpie14")
 	rootCmd.PersistentFlags().StringVar(&outputExample, "outputExample", "matt.carpenter1411@gmail.com:Carpie14 | ATK = <accesstoken>", "Output example like matt.carpenter1411@gmail.com:Carpie14 | ATK = <accesstoken>")
 	rootCmd.PersistentFlags().BoolVar(&onlyATK, "onlyATK", false, "Output only the ATK if set to true")
+	rootCmd.PersistentFlags().StringVar(&endpoint, "endpoint", "https://replace-your-url/api/auth", "provider your endpoint")
+	rootCmd.PersistentFlags().StringVar(&delimiterInput, "delimiters", "", "Comma-separated list of custom delimiters for parsing")
+	delimiters = strings.Split(delimiterInput, ",") // 使用逗号分隔用户输入的字符串
 
 	passAccessTokenDelimiter = parseDelimiter(inputExample, outputExample)
 }
@@ -50,23 +57,11 @@ var rootCmd = &cobra.Command{
 }
 
 func findDelimiter(s string) string {
-	colonCount := 0
-	dashCount := 0
-
-	for _, char := range s {
-		if char == '-' {
-			dashCount++
-		} else if char == ':' {
-			colonCount++
+	for _, delimiter := range delimiters {
+		if strings.Contains(s, delimiter) {
+			return delimiter
 		}
 	}
-
-	if dashCount >= 4 {
-		return "----"
-	} else if colonCount >= 1 {
-		return ":"
-	}
-
 	return ""
 }
 

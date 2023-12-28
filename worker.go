@@ -75,9 +75,8 @@ func (w *worker) Work(input input) (entry, error) {
 	}
 
 	err := retry.Do(func() error {
-		url := "https://replace-your-url/api/auth"
 		payload := strings.NewReader(fmt.Sprintf("username=%s&password=%s", entry.username, entry.password))
-		req, err := http.NewRequest("POST", url, payload)
+		req, err := http.NewRequest("POST", endpoint, payload)
 		if err != nil {
 			return err
 		}
