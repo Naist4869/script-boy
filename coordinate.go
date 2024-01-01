@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dgrijalva/jwt-go"
+
 	"golang.org/x/time/rate"
 )
 
@@ -262,7 +264,10 @@ func (c *coordinator) logStats(stopping, stopped bool) {
 	// 获取当前执行到的行数
 	now := time.Now()
 	r := float64(c.count-c.countLastLog) / now.Sub(c.timeLastLog).Minutes()
-	progress := float64(c.count) * 100 / float64(c.nextParseLine-1)
+	var progress float64
+	if len(c.entries) > 0 {
+		progress = float64(c.nextParseLine) * 100 / float64(len(c.entries))
+	}
 
 	slog.Info(fmt.Sprintf("next parsing line: %d, execution time: %s, number of successful executions: %d, number awaiting: %d, task completion rate: %f%%, speed: %.0f/min, total runtime of workers: %s, is stopping: %t, process has exited: %t", c.nextParseLine, c.elapsed(), c.count, c.countWaiting, progress, r, c.duration, stopping, stopped))
 
@@ -322,4 +327,45 @@ func (c *coordinator) writeLines(entries []entry) error {
 	}
 	c.flushLine += count
 	return nil
+}
+
+var PublicKey = []byte(`-----BEGIN PUBLIC KEY-----
+MIIC+zCCAeOgAwIBAgIJLlfMWYK8snRdMA0GCSqGSIb3DQEBCwUAMBsxGTAXBgNVBAM
+TEG9wZW5haS5hdXRoMC5jb20wHhcNMjAwMjExMDUyMjI5WhcNMzMxMDIwMDUyMjI5Wj
+AbMRkwFwYDVQQDExBvcGVuYWkuYXV0aDAuY29tMIIBIjANBgkqhkiG9w0BAQEFAAOCA
+Q8AMIIBCgKCAQEA27rOErDOPvPc3mOADYtQBeenQm5NS5VHVaoO/Zmgsf1M0Wa/2WgL
+m9jX65Ru/K8Az2f4MOdpBxxLL686ZS+K7eJC/oOnrxCRzFYBqQbYo+JMeqNkrCn34ye
+d4XkX4ttoHi7MwCEpVfb05Qf/ZAmNI1XjecFYTyZQFrd9LjkX6lr05zY6aM/+MCBNeB
+Wp35pLLKhiq9AieB1wbDPcGnqxlXuU/bLgIyqUltqLkr9JHsf/2T4VrXXNyNeQyBq5w
+jYlRkpBQDDDNOcdGpx1buRrZ2hFyYuXDRrMcR6BQGC0ur9hI5obRYlchDFhlb0ElsJ2
+bshDDGRk5k3doHqbhj2IgQIDAQABo0IwQDAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQ
+WBBSzpMyU3UZWR9zdv+ckg/L6GZCcJDAOBgNVHQ8BAf8EBAMCAoQwDQYJKoZIhvcNAQ
+ELBQADggEBAEuUscoo1BZmCUZG8TEki0NHFjv08u2SHdcMU1xR0PfyKY6h+pLrSrGq8
+kYfjCHb/OPt0+Han0fiGRTnKurQ/u1leuJ7qHVHRILmP3e1MC8PUELjHpBo3f38Kk6U
+lbR5pbL5K7ZHeEO6CLNTOg54xLY/6e2ben4wv/LP39E6Gg56+iT/goJHkV64+nu3v3d
+Tmj+uSHWfkq93oG5tsOk2nTN4UCpyT5fWGv4eh7q2cKElMQM5GT/uZnCjEdDmJU2M11
+k6Ttg+FMNPgvH6R4e+lqhtmslXwXv9Xm95eS6JokJaYUimNX+dzhD+eRq+88vGJO63s
+afkEyGvifAMJFPwO78=
+-----END PUBLIC KEY-----`)
+
+func checkInfo(tokenString string) (string, error) {
+	// Parse the token
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		// Check for the expected signing method
+		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
+			return nil, errors.New("unexpected signing method")
+		}
+		return jwt.ParseRSAPublicKeyFromPEM(PublicKey)
+	})
+
+	if err != nil {
+		return "", err
+	}
+
+	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
+		profile := claims["https://api.openai.com/profile"].(map[string]interface{})
+		email := profile["email"].(string)
+		return email, nil
+	}
+	return "", errors.New("invalid access token")
 }

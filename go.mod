@@ -4,6 +4,7 @@ go 1.21.1
 
 require (
 	github.com/avast/retry-go v2.7.0+incompatible
+	github.com/dgrijalva/jwt-go v3.2.0+incompatible
 	github.com/pkg/errors v0.9.1
 	github.com/spf13/cobra v1.8.0
 	go.uber.org/automaxprocs v1.5.3

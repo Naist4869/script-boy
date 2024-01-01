@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -43,7 +44,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&outputExample, "outputExample", "matt.carpenter1411@gmail.com:Carpie14 | ATK = <accesstoken>", "Output example like matt.carpenter1411@gmail.com:Carpie14 | ATK = <accesstoken>")
 	rootCmd.PersistentFlags().BoolVar(&onlyATK, "onlyATK", false, "Output only the ATK if set to true")
 	rootCmd.PersistentFlags().StringVar(&endpoint, "endpoint", "https://replace-your-url/api/auth", "provider your endpoint")
-	rootCmd.PersistentFlags().StringVar(&delimiterInput, "delimiters", "", "Comma-separated list of custom delimiters for parsing")
+	rootCmd.PersistentFlags().StringVar(&delimiterInput, "delimiters", ":,----", "Comma-separated list of custom delimiters for parsing")
 	delimiters = strings.Split(delimiterInput, ",") // 使用逗号分隔用户输入的字符串
 
 	passAccessTokenDelimiter = parseDelimiter(inputExample, outputExample)
@@ -141,7 +142,7 @@ func openFile(inputFileName string, outputFileName string) ([]entry, int, *os.Fi
 	}
 
 	// 计算需要跳过的行数
-	skipLine, breakpointResumption, err := calculateSkipLine(outputFile)
+	skipUsername, breakpointResumption, err := calculateSkipLine(outputFile)
 	if err != nil {
 		outputFile.Close()
 		return nil, 0, nil, errors.Wrap(err, "reading from output file")
@@ -155,7 +156,7 @@ func openFile(inputFileName string, outputFileName string) ([]entry, int, *os.Fi
 	}
 	defer inputFile.Close()
 
-	entries, nextParseLine, err := processInputFile(inputFile, outputFile, skipLine, breakpointResumption)
+	entries, nextParseLine, err := processInputFile(inputFile, outputFile, skipUsername, breakpointResumption)
 	if err != nil {
 		outputFile.Close()
 		return nil, 0, nil, err
@@ -163,23 +164,88 @@ func openFile(inputFileName string, outputFileName string) ([]entry, int, *os.Fi
 
 	return entries, nextParseLine, outputFile, nil
 }
+func findLastNonEmptyLine(file *os.File) (string, error) {
+	const bufSize = 1024
+	buf := make([]byte, bufSize)
+	var lastLine string
+	stat, err := file.Stat()
+	if err != nil {
+		return "", err
+	}
+	fileSize := stat.Size()
 
-func calculateSkipLine(file *os.File) (string, bool, error) {
-	scanner := bufio.NewScanner(file)
-	var (
-		breakpointResumption bool
-		lastLine             string
-	)
-	for scanner.Scan() {
-		breakpointResumption = true
-		line := scanner.Text()
+	// Start from the end of the file
+	for offset := fileSize; offset > 0; {
+		readSize := bufSize
+		if offset < int64(bufSize) {
+			readSize = int(offset)
+		}
 
-		if strings.Contains(line, "@") {
-			lastLine = line
+		offset -= int64(readSize)
+		_, err := file.Seek(offset, io.SeekStart)
+		if err != nil {
+			return "", err
+		}
+
+		_, err = file.Read(buf[:readSize])
+		if err != nil {
+			return "", err
+		}
+
+		// Process the buffer in reverse order to find the last non-empty line
+		for i := readSize - 1; i >= 0; i-- {
+			if buf[i] == '\n' {
+				if len(lastLine) > 0 {
+					// Reverse the collected line (as we read it backwards)
+					return reverseString(lastLine), nil
+				}
+			} else {
+				lastLine += string(buf[i])
+			}
 		}
 	}
 
-	if breakpointResumption && lastLine == "" {
+	// Handle the case where the last line is also the first line (no newlines)
+	if len(lastLine) > 0 {
+		return reverseString(lastLine), nil
+	}
+
+	return "", nil
+}
+
+func reverseString(s string) string {
+	runes := []rune(s)
+	for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
+		runes[i], runes[j] = runes[j], runes[i]
+	}
+	return string(runes)
+}
+func calculateSkipLine(file *os.File) (username string, breakpointResumption bool, err error) {
+	lastLine, err := findLastNonEmptyLine(file)
+	if err != nil {
+		return "", false, err
+	}
+
+	delimiter := findDelimiter(lastLine)
+	fields := strings.Fields(lastLine)
+	if len(fields) > 0 {
+		if strings.Contains(fields[0], "@") && strings.Contains(fields[0], ".") && delimiter != "" {
+			split := strings.Split(fields[0], delimiter)
+			if len(split) >= 2 {
+				username = split[0]
+			}
+		}
+
+		if username == "" {
+			var accessToken string
+			n, err := fmt.Sscanf(lastLine, "ATK = %s", &accessToken)
+			if err == nil && n == 1 {
+				username, _ = checkInfo(accessToken)
+			}
+		}
+	}
+
+	if username == "" {
 		// Clear the file content
 		err := file.Truncate(0)
 		if err != nil {
@@ -193,7 +259,7 @@ func calculateSkipLine(file *os.File) (string, bool, error) {
 		return "", false, nil
 	}
 
-	return lastLine, breakpointResumption, scanner.Err()
+	return username, username != "", nil
 }
 
 var userPassDelimiterMap = map[string]struct{}{}
@@ -201,7 +267,7 @@ var userPassDelimiterMap = map[string]struct{}{}
 var userPassDelimiterReMap = map[string]*regexp.Regexp{}
 var oldnew []string
 
-func processInputFile(inputFile *os.File, outputFile *os.File, skipLine string, breakpointResumption bool) ([]entry, int, error) {
+func processInputFile(inputFile *os.File, outputFile *os.File, skipUsername string, breakpointResumption bool) ([]entry, int, error) {
 	var entries = []entry{{}}
 	scanner := bufio.NewScanner(inputFile)
 
@@ -221,8 +287,7 @@ func processInputFile(inputFile *os.File, outputFile *os.File, skipLine string, 
 		// Step 2: Apply delimiter formatting
 		replacer := strings.NewReplacer(oldnew...)
 		line = replacer.Replace(line)
-		parts := strings.SplitN(line, " ", 2)
-		firstPart := parts[0]
+
 		var (
 			username string
 			password string
@@ -230,38 +295,43 @@ func processInputFile(inputFile *os.File, outputFile *os.File, skipLine string, 
 
 		delimiter := findDelimiter(line)
 		if breakpointResumption {
-			if nextParseLine == 0 {
-				nextParseLine = BreakpointResumption(skipLine, firstPart, lineCount)
-			}
-			if nextParseLine != 0 && lineCount >= nextParseLine {
-				if strings.Contains(firstPart, "@") && strings.Contains(firstPart, ".") && delimiter != "" {
-					userPassDelimiter := delimiter
-					_, exist := userPassDelimiterMap[userPassDelimiter]
-					if !exist {
-						userPassDelimiterMap[userPassDelimiter] = struct{}{}
-						regexPattern := "\\s*" + regexp.QuoteMeta(delimiter) + "\\s*"
-						re := regexp.MustCompile(regexPattern)
-						userPassDelimiterReMap[userPassDelimiter] = re
+			if strings.Contains(line, "@") && strings.Contains(line, ".") && delimiter != "" {
+				userPassDelimiter := delimiter
+				_, exist := userPassDelimiterMap[userPassDelimiter]
+				if !exist {
+					userPassDelimiterMap[userPassDelimiter] = struct{}{}
+					regexPattern := "\\s*" + regexp.QuoteMeta(delimiter) + "\\s*"
+					re := regexp.MustCompile(regexPattern)
+					userPassDelimiterReMap[userPassDelimiter] = re
 
-						oldnew = append(oldnew, " "+delimiter+" ", delimiter)
-						oldnew = append(oldnew, delimiter+" ", delimiter)
-						oldnew = append(oldnew, " "+delimiter, delimiter)
+					oldnew = append(oldnew, " "+delimiter+" ", delimiter)
+					oldnew = append(oldnew, delimiter+" ", delimiter)
+					oldnew = append(oldnew, " "+delimiter, delimiter)
+
+				}
+
+				split := strings.Split(line, userPassDelimiter)
+				if len(split) >= 2 {
+					username = split[0]
+					password = strings.Join(split[1:], userPassDelimiter)
+					if nextParseLine == 0 {
+						if skipUsername == username {
+							nextParseLine = lineCount + 1
+						}
+						username = ""
+						password = ""
 
 					}
 
-					split := strings.Split(firstPart, userPassDelimiter)
-					if len(split) >= 2 {
-						username = split[0]
-						password = strings.Join(split[1:], userPassDelimiter)
-					} else {
-						slog.Error(fmt.Sprintf("skip %d, invalid line: %s, breakpointResumption: %t", lineCount, line, breakpointResumption))
-					}
 				} else {
 					slog.Error(fmt.Sprintf("skip %d, invalid line: %s, breakpointResumption: %t", lineCount, line, breakpointResumption))
 				}
+			} else {
+				slog.Error(fmt.Sprintf("skip %d, invalid line: %s, breakpointResumption: %t", lineCount, line, breakpointResumption))
 			}
+
 		} else {
-			if strings.Contains(firstPart, "@") && strings.Contains(firstPart, ".") {
+			if strings.Contains(line, "@") && strings.Contains(line, ".") {
 				parsedHeaderInformation = true
 				userPassDelimiter := delimiter
 				_, exist := userPassDelimiterMap[userPassDelimiter]
@@ -274,7 +344,7 @@ func processInputFile(inputFile *os.File, outputFile *os.File, skipLine string, 
 					oldnew = append(oldnew, delimiter+" ", delimiter)
 					oldnew = append(oldnew, " "+delimiter, delimiter)
 				}
-				split := strings.Split(firstPart, userPassDelimiter)
+				split := strings.Split(line, userPassDelimiter)
 				if len(split) >= 2 {
 					if nextParseLine == 0 {
 						nextParseLine = lineCount
@@ -302,13 +372,6 @@ func processInputFile(inputFile *os.File, outputFile *os.File, skipLine string, 
 	}
 
 	return entries, nextParseLine, scanner.Err()
-}
-
-func BreakpointResumption(skipLine string, line string, lineCount int) int {
-	if line != "" && strings.Contains(skipLine, line) {
-		return lineCount + 1
-	}
-	return 0
 }
 
 func main() {
