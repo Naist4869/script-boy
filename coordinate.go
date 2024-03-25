@@ -200,8 +200,10 @@ func (c *coordinator) CoordinateStart() (err error) {
 			c.entries[result.workResult.line] = result.workResult
 			if result.err != nil {
 				slog.Info(fmt.Sprintf("line: %d, err: %v", result.workResult.line, result.err))
-			} else {
+			} else if result.workResult.username != "" && result.workResult.password != "" {
+
 				slog.Info(fmt.Sprintf("line: %d, ok: %s %s", result.workResult.line, result.workResult.username, result.workResult.password))
+
 			}
 
 			if c.limit > 0 && c.count >= c.limit {
@@ -239,7 +241,9 @@ func (c *coordinator) peekInput() (input, bool, bool) {
 	}
 
 	if c.queue.len == 0 {
-		c.refillInputQueue()
+		if c.refillInputQueue() {
+			return input{}, false, false
+		}
 	}
 
 	e, ok := c.queue.peek()
@@ -279,16 +283,25 @@ func (c *coordinator) elapsed() time.Duration {
 	return time.Since(c.startTime).Round(1 * time.Second)
 }
 
-func (c *coordinator) refillInputQueue() {
+func (c *coordinator) refillInputQueue() bool {
+	var wait bool
+	if c.nextParseLine < len(c.entries) {
+		length := c.group
+		remaining := len(c.entries) - c.nextParseLine
+		if remaining <= c.group {
+			length = remaining
+			if c.countWaiting != 0 {
+				wait = true
+			}
+		}
 
-	if c.nextParseLine+c.group <= len(c.entries) {
-		for i := 0; i < c.group; i++ {
+		for i := 0; i < length; i++ {
 			c.queue.enqueue(c.entries[c.nextParseLine+i])
 		}
 
-		c.nextParseLine = c.nextParseLine + c.group
+		c.nextParseLine += length
 	}
-
+	return wait
 }
 
 func (c *coordinator) writeLines(entries []entry) error {

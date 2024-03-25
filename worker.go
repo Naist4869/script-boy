@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -75,7 +76,10 @@ func (w *worker) Work(input input) (entry, error) {
 	}
 
 	err := retry.Do(func() error {
-		payload := strings.NewReader(fmt.Sprintf("username=%s&password=%s", entry.username, entry.password))
+		data := url.Values{}
+		data.Set("username", entry.username)
+		data.Set("password", entry.password)
+		payload := strings.NewReader(data.Encode())
 		req, err := http.NewRequest("POST", endpoint, payload)
 		if err != nil {
 			return err

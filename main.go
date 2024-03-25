@@ -32,29 +32,39 @@ var (
 	delimiters               []string // 解析后的分隔符列表
 
 )
+var emailFile, dbFile, outputFile string
 
 func init() {
 	// 设置命令行标志
-	rootCmd.PersistentFlags().IntVar(&nextParseLine, "nextParseLine", 0, "Next parse line number")
-	rootCmd.PersistentFlags().IntVar(&qps, "qps", 1, "Queries per second limit")
-	rootCmd.PersistentFlags().IntVar(&parallel, "parallel", 0, "Number of parallel workers")
-	rootCmd.PersistentFlags().Int64Var(&limit, "limit", 0, "Account Limit")
-	rootCmd.PersistentFlags().Int64Var(&timeout, "timeout", 0, "Timeout in seconds")
-	rootCmd.PersistentFlags().StringVar(&inputExample, "inputExample", "matt.carpenter1411@gmail.com:Carpie14", "Input example like matt.carpenter1411@gmail.com:Carpie14")
-	rootCmd.PersistentFlags().StringVar(&outputExample, "outputExample", "matt.carpenter1411@gmail.com:Carpie14 | ATK = <accesstoken>", "Output example like matt.carpenter1411@gmail.com:Carpie14 | ATK = <accesstoken>")
-	rootCmd.PersistentFlags().BoolVar(&onlyATK, "onlyATK", false, "Output only the ATK if set to true")
-	rootCmd.PersistentFlags().StringVar(&endpoint, "endpoint", "https://replace-your-url/api/auth", "provider your endpoint")
-	rootCmd.PersistentFlags().StringVar(&delimiterInput, "delimiters", ":,----", "Comma-separated list of custom delimiters for parsing")
+	transformCmd.PersistentFlags().IntVar(&nextParseLine, "nextParseLine", 0, "Next parse line number")
+	transformCmd.PersistentFlags().IntVar(&qps, "qps", 1, "Queries per second limit")
+	transformCmd.PersistentFlags().IntVar(&parallel, "parallel", 0, "Number of parallel workers")
+	transformCmd.PersistentFlags().Int64Var(&limit, "limit", 0, "Account Limit")
+	transformCmd.PersistentFlags().Int64Var(&timeout, "timeout", 0, "Timeout in seconds")
+	transformCmd.PersistentFlags().StringVar(&inputExample, "inputExample", "matt.carpenter1411@gmail.com:Carpie14", "Input example like matt.carpenter1411@gmail.com:Carpie14")
+	transformCmd.PersistentFlags().StringVar(&outputExample, "outputExample", "matt.carpenter1411@gmail.com:Carpie14 | ATK = <accesstoken>", "Output example like matt.carpenter1411@gmail.com:Carpie14 | ATK = <accesstoken>")
+	transformCmd.PersistentFlags().BoolVar(&onlyATK, "onlyATK", false, "Output only the ATK if set to true")
+	transformCmd.PersistentFlags().StringVar(&endpoint, "endpoint", "https://replace-your-url/api/auth", "provider your endpoint")
+	transformCmd.PersistentFlags().StringVar(&delimiterInput, "delimiters", ":,----", "Comma-separated list of custom delimiters for parsing")
 	delimiters = strings.Split(delimiterInput, ",") // 使用逗号分隔用户输入的字符串
+	matchCmd.Flags().StringVarP(&outputFile, "output", "o", "", "Path to the output file (optional)")
 
 	passAccessTokenDelimiter = parseDelimiter(inputExample, outputExample)
 }
 
-var rootCmd = &cobra.Command{
+var rootCmd = &cobra.Command{}
+var transformCmd = &cobra.Command{
 	Use:   "transform [input file] [output file]",
 	Short: "Transform appends a specified string to each line of the input file",
-	Args:  cobra.RangeArgs(1, 2), // 修改这里
+	Args:  cobra.RangeArgs(1, 2),
 	Run:   transform,
+}
+
+var matchCmd = &cobra.Command{
+	Use:   "match [email file] [database file]",
+	Short: "Match emails with passwords",
+	Args:  cobra.ExactArgs(2),
+	Run:   matchEmails,
 }
 
 func findDelimiter(s string) string {
@@ -75,6 +85,80 @@ func parseDelimiter(inputStr, outputStr string) string {
 	passAccessTokenDelimiter := remainingStr[:endIndex]
 
 	return passAccessTokenDelimiter
+}
+
+func matchEmails(cmd *cobra.Command, args []string) {
+	emailFile = args[0]
+	dbFile = args[1]
+	emails, err := readLines(emailFile)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Error reading email file: %v", err))
+		return
+	}
+
+	emailMap := make(map[string]bool)
+	for _, email := range emails {
+		emailMap[email] = true
+	}
+
+	var outputWriter *bufio.Writer
+	if outputFile != "" {
+		file, err := os.Create(outputFile)
+		if err != nil {
+			slog.Error(fmt.Sprintf("Error creating output file: %v", err))
+			return
+		}
+		defer file.Close()
+		outputWriter = bufio.NewWriter(file)
+	}
+
+	dbFileHandle, err := os.Open(dbFile)
+	if err != nil {
+		slog.Error(fmt.Sprintf("Error opening database file: %v", err))
+		return
+	}
+	defer dbFileHandle.Close()
+
+	scanner := bufio.NewScanner(dbFileHandle)
+	for scanner.Scan() {
+		line := scanner.Text()
+		delimiter := findDelimiter(line)
+
+		parts := strings.Split(line, delimiter)
+		if len(parts) >= 2 && emailMap[parts[0]] {
+			username := parts[0]
+			password := strings.Join(parts[1:], delimiter)
+			output := username + delimiter + password
+			if outputWriter != nil {
+				outputWriter.WriteString(output + "\n")
+			} else {
+				fmt.Println(output)
+			}
+		}
+	}
+
+	if outputWriter != nil {
+		outputWriter.Flush()
+	}
+
+	if err := scanner.Err(); err != nil {
+		slog.Error(fmt.Sprintf("Error reading database file: %v", err))
+	}
+}
+
+func readLines(filePath string) ([]string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+	return lines, scanner.Err()
 }
 
 func transform(cmd *cobra.Command, args []string) {
@@ -375,6 +459,9 @@ func processInputFile(inputFile *os.File, outputFile *os.File, skipUsername stri
 }
 
 func main() {
+	rootCmd.AddCommand(matchCmd)
+	rootCmd.AddCommand(transformCmd)
+
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
